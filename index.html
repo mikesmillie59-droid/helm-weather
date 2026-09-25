@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Helm Weather</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root {
+    --paper: #EEF3F3;
+    --panel: #FFFFFF;
+    --ink: #16293A;
+    --muted: #5A6D7B;
+    --line: #D2DDE2;
+    --sea: #CFE3EC;
+    --sea-strong: #2F74A0;
+    --magenta: #A3246F;
+    --night: rgba(22, 41, 58, 0.07);
+    --amber: #B87A08;
+    --red: #C0392F;
+    --body: "Barlow", "Helvetica Neue", Arial, sans-serif;
+    --num: "Barlow Condensed", "Arial Narrow", "Helvetica Neue", sans-serif;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0D1822;
+      --panel: #142331;
+      --ink: #DCE6ED;
+      --muted: #8FA3B2;
+      --line: #25394A;
+      --sea: #1A3A52;
+      --sea-strong: #6FB0D8;
+      --magenta: #E06AB0;
+      --night: rgba(0, 0, 0, 0.28);
+      --amber: #E3A93A;
+      --red: #F0706A;
+    }
+  }
+  *, *::before, *::after { box-sizing: inherit; }
+  html, body { margin: 0; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 17px;
+    line-height: 1.45;
+    -webkit-text-size-adjust: 100%;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 20px; }
+
+  /* Header */
+  header { padding: 18px 0 14px; border-bottom: 1px solid var(--line); }
+  .bar { display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: flex-end; justify-content: space-between; }
+  h1 {
+    font-family: var(--num);
+    font-weight: 600;
+    font-size: clamp(2rem, 4vw, 2.8rem);
+    line-height: 1;
+    margin: 0;
+    letter-spacing: 0.01em;
+  }
+  .meta { margin: 6px 0 0; color: var(--muted); font-size: 0.95rem; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  button {
+    font: inherit;
+    font-size: 0.95rem;
+    font-weight: 500;
+    min-height: 44px;
+    padding: 0 16px;
+    border-radius: 6px;
+    border: 1.5px solid var(--ink);
+    background: transparent;
+    color: var(--ink);
+    cursor: pointer;
+  }
+  button.primary { background: var(--magenta); border-color: var(--magenta); color: #fff; }
+  button:focus-visible, input:focus-visible { outline: 3px solid var(--sea-strong); outline-offset: 2px; }
+  button[aria-expanded="true"] { background: var(--ink); color: var(--paper); }
+
+  /* Panels */
+  .panel { margin-top: 14px; }
+  .panel[hidden] { display: none; }
+  #searchInput {
+    width: 100%;
+    max-width: 520px;
+    font: inherit;
+    padding: 10px 14px;
+    min-height: 46px;
+    border-radius: 6px;
+    border: 1.5px solid var(--line);
+    background: var(--panel);
+    color: var(--ink);
+  }
+  #results { list-style: none; margin: 8px 0 0; padding: 0; max-width: 520px; }
+  #results button {
+    width: 100%;
+    text-align: left;
+    border: 0;
+    border-bottom: 1px solid var(--line);
+    border-radius: 0;
+    padding: 10px 4px;
+    height: auto;
+  }
+  #results small { color: var(--muted); display: block; font-weight: 400; }
+  #map { height: min(60vh, 520px); border-radius: 6px; border: 1px solid var(--line); }
+  .hint { color: var(--muted); font-size: 0.92rem; margin: 8px 0 0; }
+
+  #status { margin: 12px 0 0; font-weight: 500; color: var(--sea-strong); min-height: 1.4em; }
+  #status.error { color: var(--red); }
+
+  /* Now section */
+  main { padding: 20px 0 8px; }
+  .now {
+    display: grid;
+    grid-template-columns: minmax(260px, 340px) 1fr;
+    gap: 28px 40px;
+    align-items: center;
+    padding-bottom: 26px;
+    border-bottom: 1px solid var(--line);
+  }
+  .dial-box { text-align: center; }
+  #dial { width: 100%; max-width: 320px; height: auto; display: block; margin: 0 auto; }
+  .wind-from { font-family: var(--num); font-size: 1.6rem; font-weight: 600; margin: 6px 0 0; }
+  .beaufort { color: var(--muted); margin: 0; }
+  .readings { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 0 28px; margin: 0; }
+  .reading { padding: 12px 0; border-top: 1px solid var(--line); }
+  .reading dt { color: var(--muted); font-size: 0.9rem; }
+  .reading dd { margin: 0; font-family: var(--num); font-weight: 600; font-size: 2rem; line-height: 1.1; }
+  .reading dd small { display: block; font-family: var(--body); font-weight: 400; font-size: 0.88rem; color: var(--muted); }
+
+  /* Chart */
+  h2 { font-family: var(--num); font-weight: 600; font-size: 1.7rem; margin: 26px 0 4px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: 0.9rem; margin: 0 0 6px; }
+  .sw { display: inline-block; width: 22px; height: 10px; margin-right: 6px; vertical-align: middle; border-radius: 2px; }
+  .sw.wind { background: var(--sea); border-top: 2.5px solid var(--sea-strong); }
+  .sw.gust { height: 0; border-top: 2.5px dashed var(--magenta); }
+  .sw.night { background: var(--night); border: 1px solid var(--line); }
+  #readout { min-height: 1.5em; font-weight: 500; margin: 4px 0 6px; }
+  .chart-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  #chart { display: block; width: 100%; min-width: 720px; height: auto; touch-action: pan-x pan-y; }
+
+  /* Days */
+  .days { margin: 0; padding: 0; list-style: none; }
+  .day {
+    display: grid;
+    grid-template-columns: 7.5rem 1fr 1fr 1.2fr 0.8fr 1fr;
+    gap: 6px 18px;
+    align-items: center;
+    padding: 14px 0 14px 14px;
+    border-top: 1px solid var(--line);
+    border-left: 4px solid var(--sea-strong);
+  }
+  .day strong { font-family: var(--num); font-size: 1.35rem; font-weight: 600; display: block; line-height: 1.1; }
+  .day small { color: var(--muted); display: block; font-size: 0.88rem; }
+
+  footer { border-top: 1px solid var(--line); margin-top: 28px; padding: 16px 0 28px; color: var(--muted); font-size: 0.9rem; }
+  .units { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; color: var(--ink); }
+  .units button { min-height: 38px; padding: 0 12px; }
+  .units button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+  footer p { margin: 4px 0; }
+
+  @media (max-width: 760px) {
+    .now { grid-template-columns: 1fr; }
+    .day { grid-template-columns: 1fr 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="bar">
+      <div>
+        <h1 id="placeName">Finding your position</h1>
+        <p class="meta" id="placeMeta">&nbsp;</p>
+      </div>
+      <div class="actions">
+        <button class="primary" id="btnGps" type="button">Use my position</button>
+        <button id="btnMap" type="button" aria-expanded="false" aria-controls="mapPanel">Pick on map</button>
+        <button id="btnSearch" type="button" aria-expanded="false" aria-controls="searchPanel">Search a place</button>
+        <button id="btnRefresh" type="button">Refresh</button>
+      </div>
+    </div>
+    <div class="panel" id="searchPanel" hidden>
+      <input id="searchInput" type="search" placeholder="Harbour, town or bay, e.g. Waiheke or San Diego" autocomplete="off" aria-label="Search for a place">
+      <ul id="results"></ul>
+    </div>
+    <div class="panel" id="mapPanel" hidden>
+      <div id="map"></div>
+      <p class="hint">Tap the water where you want the forecast.</p>
+    </div>
+    <p id="status" role="status"></p>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="now" aria-label="Conditions now">
+    <div class="dial-box">
+      <svg id="dial" viewBox="-150 -150 300 300" role="img" aria-label="Wind dial"></svg>
+      <p class="wind-from" id="windFrom">&nbsp;</p>
+      <p class="beaufort" id="beaufort">&nbsp;</p>
+    </div>
+    <dl class="readings" id="readings"></dl>
+  </section>
+
+  <section aria-label="Wind outlook">
+    <h2>Wind for the next 3 days</h2>
+    <div class="legend">
+      <span><i class="sw wind"></i>Wind</span>
+      <span><i class="sw gust"></i>Gusts</span>
+      <span><i class="sw night"></i>Night</span>
+      <span>Arrows show which way the wind is blowing</span>
+    </div>
+    <p id="readout">Touch the chart to see any hour.</p>
+    <div class="chart-scroll"><svg id="chart" viewBox="0 0 960 270"></svg></div>
+  </section>
+
+  <section aria-label="Day by day">
+    <h2>Day by day</h2>
+    <ul class="days" id="days"></ul>
+  </section>
+</main>
+
+<footer class="wrap">
+  <div class="units" role="group" aria-label="Units">
+    Units:
+    <button type="button" data-units="auto">Automatic</button>
+    <button type="button" data-units="metric">Metric (°C, hPa)</button>
+    <button type="button" data-units="us">US (°F, inHg)</button>
+  </div>
+  <p id="updated">&nbsp;</p>
+  <p>Wind in knots, visibility in nautical miles. Forecast data from Open-Meteo. Map from OpenStreetMap and OpenSeaMap.</p>
+  <p>This is a planning aid, not an official forecast. Always check MetService (NZ) or the National Weather Service (US) before heading out.</p>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var $ = function (id) { return document.getElementById(id); };
+  var DEFAULT = { lat: -36.84, lon: 174.77, name: "Waitematā Harbour", region: "Auckland", country: "NZ", countryName: "New Zealand" };
+  var REFRESH_MS = 15 * 60 * 1000;
+
+  var store = {
+    get: function (k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } },
+    set: function (k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+  };
+
+  var state = { loc: null, data: null, units: store.get("units") || "auto", fetchedAt: 0 };
+
+  // ---------- Lookups ----------
+  var WMO = {
+    0: "Clear", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast", 45: "Fog", 48: "Freezing fog",
+    51: "Light drizzle", 53: "Drizzle", 55: "Heavy drizzle", 56: "Freezing drizzle", 57: "Freezing drizzle",
+    61: "Light rain", 63: "Rain", 65: "Heavy rain", 66: "Freezing rain", 67: "Freezing rain",
+    71: "Light snow", 73: "Snow", 75: "Heavy snow", 77: "Snow grains",
+    80: "Light showers", 81: "Showers", 82: "Heavy showers", 85: "Snow showers", 86: "Snow showers",
+    95: "Thunderstorms", 96: "Thunderstorms, hail", 99: "Thunderstorms, hail"
+  };
+  var POINTS = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+  function compass(d) { return POINTS[Math.round((((d % 360) + 360) % 360) / 22.5) % 16]; }
+
+  var BF_LIMITS = [1, 4, 7, 11, 17, 22, 28, 34, 41, 48, 56, 64];
+  var BF_NAMES = ["Calm","Light air","Light breeze","Gentle breeze","Moderate breeze","Fresh breeze",
+    "Strong breeze","Near gale","Gale","Strong gale","Storm","Violent storm","Hurricane force"];
+  function force(kn) {
+    var s = Math.round(kn);
+    for (var i = 0; i < BF_LIMITS.length; i++) { if (s < BF_LIMITS[i]) return i; }
+    return 12;
+  }
+  function windColour(f) { return f >= 7 ? "var(--red)" : f >= 5 ? "var(--amber)" : "var(--sea-strong)"; }
+
+  // ---------- Units ----------
+  var US_TZ = /^America\/(New_York|Chicago|Denver|Los_Angeles|Anchorage|Phoenix|Detroit|Boise|Juneau|Sitka|Nome|Adak|Yakutat|Metlakatla|Menominee|Indiana|Kentucky|North_Dakota)/;
+  function imperial() {
+    if (state.units === "us") return true;
+    if (state.units === "metric") return false;
+    if (state.loc && state.loc.country) return state.loc.country === "US";
+    var tz = state.data ? state.data.timezone || "" : "";
+    return US_TZ.test(tz) || tz === "Pacific/Honolulu";
+  }
+  var fmt = {
+    temp: function (c) { return c == null ? "–" : imperial() ? Math.round(c * 9 / 5 + 32) + "°F" : Math.round(c) + "°C"; },
+    pres: function (h) { return h == null ? "–" : imperial() ? (h * 0.02953).toFixed(2) + " inHg" : Math.round(h) + " hPa"; },
+    vis: function (m) {
+      if (m == null) return "–";
+      var nm = m / 1852;
+      return nm >= 10 ? "10+ nm" : nm.toFixed(nm < 2 ? 1 : 0) + " nm";
+    }
+  };
+
+  // ---------- Time helpers (API gives local time of the chosen spot) ----------
+  var DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  function dayLabel(s) {
+    var d = new Date(Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10)));
+    return DOW[d.getUTCDay()] + " " + (+s.slice(8, 10));
+  }
+  function hhmm(s) { return s ? s.slice(11, 16) : "–"; }
+
+  function coordText(lat, lon) {
+    return Math.abs(lat).toFixed(2) + "°" + (lat < 0 ? "S" : "N") + " " + Math.abs(lon).toFixed(2) + "°" + (lon < 0 ? "W" : "E");
+  }
+
+  function setStatus(msg, isError) {
+    var el = $("status");
+    el.textContent = msg || "";
+    el.className = isError ? "error" : "";
+  }
+
+  // ---------- Location ----------
+  function reverseLookup(lat, lon) {
+    var url = "https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=" + lat + "&longitude=" + lon + "&localityLanguage=en";
+    return fetch(url).then(function (r) { return r.json(); }).then(function (j) {
+      return {
+        name: j.locality || j.city || "",
+        region: j.principalSubdivision || "",
+        country: j.countryCode || "",
+        countryName: j.countryName || ""
+      };
+    }).catch(function () { return {}; });
+  }
+
+  function setLocation(lat, lon, meta) {
+    lat = +(+lat).toFixed(3);
+    lon = +(+lon).toFixed(3);
+    $("placeName").textContent = "Loading forecast";
+    var ready = meta && meta.name ? Promise.resolve(meta) : reverseLookup(lat, lon);
+    return ready.then(function (m) {
+      m = m || {};
+      state.loc = {
+        lat: lat, lon: lon,
+        name: m.name || "Open water",
+        region: m.region || "",
+        country: m.country || "",
+        countryName: m.countryName || ""
+      };
+      store.set("loc", state.loc);
+      return loadForecast();
+    });
+  }
+
+  function useGps(fallback) {
+    if (!navigator.geolocation) {
+      setStatus("This device can't share its position. Pick a spot on the map instead.", true);
+      if (fallback) setLocation(DEFAULT.lat, DEFAULT.lon, DEFAULT);
+      return;
+    }
+    setStatus("Getting your position…");
+    navigator.geolocation.getCurrentPosition(function (p) {
+      setStatus("");
+      setLocation(p.coords.latitude, p.coords.longitude);
+    }, function () {
+      setStatus("Location access is off. Allow it in your browser settings, or pick a spot on the map.", true);
+      if (fallback) setLocation(DEFAULT.lat, DEFAULT.lon, DEFAULT);
+    }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
+  }
+
+  // ---------- Forecast ----------
+  function loadForecast() {
+    if (!state.loc) return Promise.resolve();
+    var l = state.loc;
+    var url = "https://api.open-meteo.com/v1/forecast?latitude=" + l.lat + "&longitude=" + l.lon +
+      "&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,cloud_cover,pressure_msl,wind_speed_10m,wind_direction_10m,wind_gusts_10m" +
+      "&hourly=temperature_2m,precipitation_probability,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m,visibility,pressure_msl" +
+      "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,wind_speed_10m_max,wind_gusts_10m_max,wind_direction_10m_dominant,sunrise,sunset" +
+      "&wind_speed_unit=kn&timezone=auto&forecast_days=4";
+    setStatus("Loading forecast…");
+    return fetch(url).then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    }).then(function (j) {
+      state.data = j;
+      state.fetchedAt = Date.now();
+      setStatus("");
+      render();
+    }).catch(function () {
+      $("placeName").textContent = state.loc.name;
+      setStatus("Couldn't load the forecast. Check your internet connection, then tap Refresh.", true);
+    });
+  }
+
+  function currentIndex(d) {
+    var key = d.current.time.slice(0, 13) + ":00";
+    var i = d.hourly.time.findIndex(function (t) { return t >= key; });
+    return i < 0 ? 0 : i;
+  }
+
+  // ---------- Rendering ----------
+  function render() {
+    var d = state.data;
+    if (!d) return;
+    var c = d.current, h = d.hourly, l = state.loc;
+    var idx = currentIndex(d);
+
+    $("placeName").textContent = l.name;
+    var bits = [];
+    if (l.region && l.region !== l.name) bits.push(l.region);
+    if (l.countryName) bits.push(l.countryName);
+    $("placeMeta").textContent = (bits.length ? bits.join(", ") + ", " : "") + coordText(l.lat, l.lon);
+
+    renderDial(c.wind_speed_10m, c.wind_gusts_10m, c.wind_direction_10m);
+    var f = force(c.wind_speed_10m);
+    $("windFrom").textContent = "From the " + compass(c.wind_direction_10m) + " (" + Math.round(c.wind_direction_10m) + "°)";
+    $("beaufort").textContent = "Force " + f + ", " + BF_NAMES[f].toLowerCase();
+
+    var trend = "";
+    if (idx >= 3 && h.pressure_msl[idx - 3] != null) {
+      var diff = c.pressure_msl - h.pressure_msl[idx - 3];
+      trend = diff > 1 ? "Rising" : diff < -1 ? "Falling" : "Steady";
+      trend += " over 3 hours";
+    }
+    var rain = h.precipitation_probability[idx];
+    var items = [
+      ["Conditions", WMO[c.weather_code] || "–", ""],
+      ["Temperature", fmt.temp(c.temperature_2m), "Feels like " + fmt.temp(c.apparent_temperature)],
+      ["Pressure", fmt.pres(c.pressure_msl), trend],
+      ["Visibility", fmt.vis(h.visibility[idx]), ""],
+      ["Chance of rain", rain == null ? "–" : rain + "%", "This hour"],
+      ["Cloud cover", c.cloud_cover + "%", ""],
+      ["Humidity", c.relative_humidity_2m + "%", ""]
+    ];
+    $("readings").innerHTML = items.map(function (it) {
+      return '<div class="reading"><dt>' + it[0] + "</dt><dd>" + it[1] + (it[2] ? "<small>" + it[2] + "</small>" : "") + "</dd></div>";
+    }).join("");
+
+    renderChart(d, idx);
+    renderDays(d);
+    renderUnits();
+
+    var tz = d.timezone_abbreviation ? " (" + d.timezone_abbreviation + ")" : "";
+    $("updated").textContent = "Showing conditions for " + hhmm(c.time) + " local time" + tz + ". Refreshes every 15 minutes.";
+  }
+
+  function renderDial(speed, gust, dir) {
+    var f = force(speed), col = windColour(f), s = "";
+    s += '<circle r="140" fill="var(--panel)" stroke="var(--line)" stroke-width="2"/>';
+    s += '<circle r="100" fill="none" stroke="var(--line)" stroke-width="1.5"/>';
+    for (var a = 0; a < 360; a += 10) {
+      var long = a % 30 === 0;
+      s += '<line x1="0" y1="-139" x2="0" y2="' + (long ? -125 : -132) + '" stroke="var(--muted)" stroke-width="' + (long ? 2 : 1) + '" transform="rotate(' + a + ')"/>';
+    }
+    [["N", 0], ["E", 90], ["S", 180], ["W", 270]].forEach(function (p) {
+      var rad = p[1] * Math.PI / 180;
+      var x = Math.sin(rad) * 112, y = -Math.cos(rad) * 112 + 6;
+      s += '<text x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" text-anchor="middle" font-family="Barlow, sans-serif" font-weight="600" font-size="17" fill="' + (p[0] === "N" ? "var(--magenta)" : "var(--muted)") + '">' + p[0] + "</text>";
+    });
+    s += '<g transform="rotate(' + dir + ')"><path d="M0,-101 L-14,-139 L14,-139 Z" fill="' + col + '"/><line x1="0" y1="-100" x2="0" y2="-82" stroke="' + col + '" stroke-width="3" stroke-linecap="round"/></g>';
+    s += '<text y="18" text-anchor="middle" font-family="Barlow Condensed, Arial Narrow, sans-serif" font-weight="600" font-size="76" fill="var(--ink)">' + Math.round(speed) + "</text>";
+    s += '<text y="42" text-anchor="middle" font-family="Barlow, sans-serif" font-size="15" fill="var(--muted)">knots</text>';
+    s += '<text y="68" text-anchor="middle" font-family="Barlow, sans-serif" font-weight="600" font-size="17" fill="var(--magenta)">gusts ' + Math.round(gust) + "</text>";
+    var dial = $("dial");
+    dial.innerHTML = s;
+    dial.setAttribute("aria-label", "Wind " + Math.round(speed) + " knots from the " + compass(dir) + ", gusting " + Math.round(gust) + " knots");
+  }
+
+  function renderChart(d, idx) {
+    var h = d.hourly, dl = d.daily;
+    var W = 960, H = 270, L = 42, R = 14, T = 14, B = 50;
+    var n = Math.min(72, h.time.length - idx);
+    if (n < 2) return;
+    var times = h.time.slice(idx, idx + n),
+        ws = h.wind_speed_10m.slice(idx, idx + n),
+        wg = h.wind_gusts_10m.slice(idx, idx + n),
+        wd = h.wind_direction_10m.slice(idx, idx + n),
+        pp = h.precipitation_probability.slice(idx, idx + n),
+        tp = h.temperature_2m.slice(idx, idx + n);
+    var step = (W - L - R) / (n - 1);
+    var maxV = Math.max.apply(null, wg.concat(ws).filter(function (v) { return v != null; }));
+    var yMax = Math.max(10, Math.ceil((maxV + 3) / 5) * 5);
+    var gridStep = yMax <= 30 ? 5 : 10;
+    var x = function (i) { return L + i * step; };
+    var y = function (v) { return T + (H - T - B) * (1 - v / yMax); };
+    var bottom = H - B;
+    var s = "";
+
+    // Night shading from sunrise/sunset
+    var sun = {};
+    dl.time.forEach(function (t, i) { sun[t] = [dl.sunrise[i], dl.sunset[i]]; });
+    var runStart = -1;
+    for (var i = 0; i <= n; i++) {
+      var t = times[i], night = false;
+      if (i < n) {
+        var ss = sun[t.slice(0, 10)];
+        night = ss ? (t < ss[0] || t >= ss[1]) : false;
+      }
+      if (night && runStart < 0) runStart = i;
+      if (!night && runStart >= 0) {
+        var x0 = Math.max(L, x(runStart) - step / 2), x1 = Math.min(W - R, x(i - 1) + step / 2);
+        s += '<rect x="' + x0.toFixed(1) + '" y="' + T + '" width="' + (x1 - x0).toFixed(1) + '" height="' + (bottom - T) + '" fill="var(--night)"/>';
+        runStart = -1;
+      }
+    }
+
+    // Grid
+    for (var g = 0; g <= yMax; g += gridStep) {
+      s += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y(g) + '" y2="' + y(g) + '" stroke="var(--line)" stroke-width="1"/>';
+      s += '<text x="' + (L - 8) + '" y="' + (y(g) + 4) + '" text-anchor="end" font-size="12" fill="var(--muted)" font-family="Barlow, sans-serif">' + g + "</text>";
+    }
+    s += '<text x="' + (L - 8) + '" y="' + (T - 2) + '" text-anchor="end" font-size="11" fill="var(--muted)" font-family="Barlow, sans-serif">kn</text>';
+
+    // Day dividers and time labels
+    var labelledStart = false;
+    times.forEach(function (t, i) {
+      var hr = t.slice(11, 13);
+      if (hr === "00") {
+        s += '<line x1="' + x(i) + '" x2="' + x(i) + '" y1="' + T + '" y2="' + (H - 4) + '" stroke="var(--muted)" stroke-width="1" stroke-opacity="0.5"/>';
+        s += '<text x="' + (x(i) + 5) + '" y="' + (H - 6) + '" font-size="14" font-weight="600" fill="var(--ink)" font-family="Barlow, sans-serif">' + dayLabel(t) + "</text>";
+      } else if (i === 0) {
+        labelledStart = true;
+        s += '<text x="' + x(0) + '" y="' + (H - 6) + '" font-size="14" font-weight="600" fill="var(--ink)" font-family="Barlow, sans-serif">Now</text>';
+      } else if ((hr === "06" || hr === "12" || hr === "18") && !(labelledStart && i < 4)) {
+        s += '<text x="' + x(i) + '" y="' + (H - 6) + '" text-anchor="middle" font-size="12" fill="var(--muted)" font-family="Barlow, sans-serif">' + hr + ":00</text>";
+      }
+      if (+hr % 3 === 0 && wd[i] != null) {
+        s += '<path d="M0,-7 L4.5,4 L0,1.5 L-4.5,4 Z" fill="var(--ink)" transform="translate(' + x(i).toFixed(1) + "," + (bottom + 17) + ") rotate(" + ((wd[i] + 180) % 360) + ')"/>';
+      }
+    });
+
+    // Wind area, wind line, gust line
+    var line = function (arr) {
+      return arr.map(function (v, i) { return (i ? "L" : "M") + x(i).toFixed(1) + "," + y(v || 0).toFixed(1); }).join(" ");
+    };
+    var windPath = line(ws);
+    s += '<path d="' + windPath + " L" + x(n - 1).toFixed(1) + "," + bottom + " L" + L + "," + bottom + ' Z" fill="var(--sea)" fill-opacity="0.85"/>';
+    s += '<path d="' + windPath + '" fill="none" stroke="var(--sea-strong)" stroke-width="2.5" stroke-linejoin="round"/>';
+    s += '<path d="' + line(wg) + '" fill="none" stroke="var(--magenta)" stroke-width="2" stroke-dasharray="6 4" stroke-linejoin="round"/>';
+
+    // Touch cursor
+    s += '<line id="cursor" x1="0" x2="0" y1="' + T + '" y2="' + bottom + '" stroke="var(--ink)" stroke-width="1.5" visibility="hidden"/>';
+    s += '<rect id="hit" x="' + L + '" y="0" width="' + (W - L - R) + '" height="' + H + '" fill="transparent"/>';
+
+    var svg = $("chart");
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    svg.innerHTML = s;
+
+    function show(e) {
+      var rect = svg.getBoundingClientRect();
+      var px = (e.clientX - rect.left) / rect.width * W;
+      var i = Math.max(0, Math.min(n - 1, Math.round((px - L) / step)));
+      var cur = $("cursor");
+      cur.setAttribute("x1", x(i));
+      cur.setAttribute("x2", x(i));
+      cur.setAttribute("visibility", "visible");
+      $("readout").textContent = dayLabel(times[i]) + ", " + hhmm(times[i]) + ": wind " + Math.round(ws[i]) +
+        " kn from the " + compass(wd[i]) + ", gusts " + Math.round(wg[i]) + " kn, rain " + (pp[i] == null ? "–" : pp[i] + "%") +
+        ", " + fmt.temp(tp[i]);
+    }
+    $("hit").addEventListener("pointermove", show);
+    $("hit").addEventListener("pointerdown", show);
+  }
+
+  function renderDays(d) {
+    var dl = d.daily, out = "";
+    for (var i = 0; i < Math.min(4, dl.time.length); i++) {
+      var t = dl.time[i] + "T00:00";
+      var name = i === 0 ? "Today" : i === 1 ? "Tomorrow" : dayLabel(t).split(" ")[0];
+      var f = force(dl.wind_speed_10m_max[i]);
+      out += '<li class="day" style="border-left-color:' + windColour(f) + '">' +
+        "<div><strong>" + name + "</strong><small>" + dayLabel(t) + "</small></div>" +
+        "<div>" + (WMO[dl.weather_code[i]] || "–") + "</div>" +
+        "<div>High " + fmt.temp(dl.temperature_2m_max[i]) + "<small>Low " + fmt.temp(dl.temperature_2m_min[i]) + "</small></div>" +
+        "<div>" + compass(dl.wind_direction_10m_dominant[i]) + " up to " + Math.round(dl.wind_speed_10m_max[i]) + " kn<small>Gusts " + Math.round(dl.wind_gusts_10m_max[i]) + " kn</small></div>" +
+        "<div>Rain " + (dl.precipitation_probability_max[i] == null ? "–" : dl.precipitation_probability_max[i] + "%") + "</div>" +
+        "<div>Sunrise " + hhmm(dl.sunrise[i]) + "<small>Sunset " + hhmm(dl.sunset[i]) + "</small></div>" +
+        "</li>";
+    }
+    $("days").innerHTML = out;
+  }
+
+  function renderUnits() {
+    document.querySelectorAll("[data-units]").forEach(function (b) {
+      b.setAttribute("aria-pressed", b.getAttribute("data-units") === state.units ? "true" : "false");
+    });
+  }
+
+  // ---------- Panels: search and map ----------
+  function togglePanel(which) {
+    var panels = { search: ["searchPanel", "btnSearch"], map: ["mapPanel", "btnMap"] };
+    Object.keys(panels).forEach(function (k) {
+      var open = k === which && $(panels[k][0]).hidden;
+      $(panels[k][0]).hidden = !open;
+      $(panels[k][1]).setAttribute("aria-expanded", open ? "true" : "false");
+      if (open && k === "search") $("searchInput").focus();
+      if (open && k === "map") openMap();
+    });
+  }
+  function closePanels() {
+    $("searchPanel").hidden = true;
+    $("mapPanel").hidden = true;
+    $("btnSearch").setAttribute("aria-expanded", "false");
+    $("btnMap").setAttribute("aria-expanded", "false");
+  }
+
+  var map, marker;
+  function openMap() {
+    if (!window.L) { setStatus("The map couldn't load. Check your internet connection.", true); return; }
+    var here = state.loc ? [state.loc.lat, state.loc.lon] : [DEFAULT.lat, DEFAULT.lon];
+    if (!map) {
+      map = L.map("map").setView(here, 10);
+      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 18, attribution: "© OpenStreetMap contributors" }).addTo(map);
+      L.tileLayer("https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png", { maxZoom: 18, attribution: "Seamarks © OpenSeaMap" }).addTo(map);
+      marker = L.circleMarker(here, { radius: 9, color: "#A3246F", weight: 3, fillOpacity: 0.25 }).addTo(map);
+      map.on("click", function (e) {
+        var ll = e.latlng.wrap();
+        marker.setLatLng(ll);
+        closePanels();
+        setLocation(ll.lat, ll.lng);
+      });
+    } else {
+      map.setView(here, map.getZoom());
+      marker.setLatLng(here);
+    }
+    setTimeout(function () { map.invalidateSize(); }, 60);
+  }
+
+  var searchTimer;
+  function runSearch(q) {
+    if (q.trim().length < 2) { $("results").innerHTML = ""; return; }
+    var url = "https://geocoding-api.open-meteo.com/v1/search?count=8&language=en&format=json&name=" + encodeURIComponent(q.trim());
+    fetch(url).then(function (r) { return r.json(); }).then(function (j) {
+      var list = j.results || [];
+      if (!list.length) { $("results").innerHTML = '<li class="hint">No places found. Try a nearby town name.</li>'; return; }
+      $("results").innerHTML = list.map(function (p, i) {
+        var sub = [p.admin1, p.country].filter(Boolean).join(", ");
+        return '<li><button type="button" data-i="' + i + '">' + p.name + "<small>" + sub + "</small></button></li>";
+      }).join("");
+      $("results").querySelectorAll("button").forEach(function (b) {
+        b.addEventListener("click", function () {
+          var p = list[+b.getAttribute("data-i")];
+          closePanels();
+          $("searchInput").value = "";
+          $("results").innerHTML = "";
+          setLocation(p.latitude, p.longitude, { name: p.name, region: p.admin1 || "", country: p.country_code || "", countryName: p.country || "" });
+        });
+      });
+    }).catch(function () {
+      $("results").innerHTML = '<li class="hint">Search isn\'t working right now. Check your internet connection.</li>';
+    });
+  }
+
+  // ---------- Wire up ----------
+  $("btnGps").addEventListener("click", function () { closePanels(); useGps(false); });
+  $("btnMap").addEventListener("click", function () { togglePanel("map"); });
+  $("btnSearch").addEventListener("click", function () { togglePanel("search"); });
+  $("btnRefresh").addEventListener("click", function () { loadForecast(); });
+  $("searchInput").addEventListener("input", function (e) {
+    clearTimeout(searchTimer);
+    var q = e.target.value;
+    searchTimer = setTimeout(function () { runSearch(q); }, 350);
+  });
+  document.querySelectorAll("[data-units]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      state.units = b.getAttribute("data-units");
+      store.set("units", state.units);
+      render();
+      renderUnits();
+    });
+  });
+
+  setInterval(function () { if (!document.hidden) loadForecast(); }, REFRESH_MS);
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden && Date.now() - state.fetchedAt > REFRESH_MS) loadForecast();
+  });
+
+  renderUnits();
+  var saved = store.get("loc");
+  if (saved && typeof saved.lat === "number") {
+    setLocation(saved.lat, saved.lon, saved);
+  } else {
+    useGps(true);
+  }
+})();
+</script>
+</body>
+</html>
