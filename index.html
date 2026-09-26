@@ -686,57 +686,27 @@
   }
 
   // ---------- LINZ (New Zealand) ----------
-  // Tide tables are CSV files downloaded from LINZ and uploaded to the same GitHub repo,
-  // named tide-<port>-<year>.csv, e.g. tide-auckland-2026.csv
-  var LINZ_PORTS = [
-    { slug: "marsden-point", name: "Marsden Point", lat: -35.838, lon: 174.498 },
-    { slug: "auckland", name: "Auckland", lat: -36.843, lon: 174.767 },
-    { slug: "onehunga", name: "Onehunga", lat: -36.928, lon: 174.786 },
-    { slug: "tauranga", name: "Tauranga", lat: -37.645, lon: 176.180 },
-    { slug: "gisborne", name: "Gisborne", lat: -38.673, lon: 178.023 },
-    { slug: "port-taranaki", name: "Port Taranaki", lat: -39.058, lon: 174.035 },
-    { slug: "napier", name: "Napier", lat: -39.475, lon: 176.917 },
-    { slug: "wellington", name: "Wellington", lat: -41.285, lon: 174.780 },
-    { slug: "picton", name: "Picton", lat: -41.290, lon: 174.005 },
-    { slug: "nelson", name: "Nelson", lat: -41.260, lon: 173.270 },
-    { slug: "westport", name: "Westport", lat: -41.738, lon: 171.600 },
-    { slug: "lyttelton", name: "Lyttelton", lat: -43.607, lon: 172.720 },
-    { slug: "timaru", name: "Timaru", lat: -44.388, lon: 171.258 },
-    { slug: "port-chalmers", name: "Port Chalmers", lat: -45.815, lon: 170.620 },
-    { slug: "dunedin", name: "Dunedin", lat: -45.880, lon: 170.515 },
-    { slug: "bluff", name: "Bluff", lat: -46.598, lon: 168.347 }
-  ];
+  // A GitHub workflow (update-tides.yml) downloads every LINZ tide station into the "tides" folder:
+  // tides/index.json lists the stations, and tides/<id>.json holds each station's highs and lows.
   var LINZ_MAX_KM = 40;
-  var linzCache = {};
+  var linzIndex = null, linzCache = {};
 
-  function fetchLinzYear(slug, year) {
-    var key = slug + "-" + year;
-    if (linzCache[key]) return linzCache[key];
-    linzCache[key] = fetch("tide-" + key + ".csv", { cache: "no-cache" }).then(function (r) {
-      if (!r.ok) throw new Error("missing " + key);
-      return r.text();
-    }).then(parseLinz).catch(function (e) { delete linzCache[key]; throw e; });
-    return linzCache[key];
+  function getLinzIndex() {
+    if (linzIndex) return linzIndex;
+    linzIndex = fetch("tides/index.json", { cache: "no-cache" }).then(function (r) {
+      if (!r.ok) throw new Error("no tide index");
+      return r.json();
+    }).catch(function (e) { linzIndex = null; throw e; });
+    return linzIndex;
   }
 
-  // LINZ CSV rows: day, weekday, month, year, then up to four pairs of time (hh:mm) and height (m)
-  function parseLinz(text) {
-    var ev = [];
-    text.split(/\r?\n/).forEach(function (line) {
-      var f = line.split(",").map(function (c) { return c.trim().replace(/^"|"$/g, ""); });
-      if (f.length < 6) return;
-      var day = +f[0], mon = +f[2], yr = +f[3];
-      if (!(day >= 1 && day <= 31 && mon >= 1 && mon <= 12 && yr > 2000)) return;
-      for (var k = 4; k + 1 < f.length; k += 2) {
-        var m = /^(\d{1,2}):?(\d{2})$/.exec(f[k]);
-        var h = parseFloat(f[k + 1]);
-        if (!m || isNaN(h)) continue;
-        var p = function (v) { return String(v).padStart(2, "0"); };
-        ev.push({ t: yr + "-" + p(mon) + "-" + p(day) + "T" + p(m[1]) + ":" + m[2], v: h });
-      }
-    });
-    if (!ev.length) throw new Error("no rows");
-    return ev;
+  function getLinzStation(id) {
+    if (linzCache[id]) return linzCache[id];
+    linzCache[id] = fetch("tides/" + id + ".json", { cache: "no-cache" }).then(function (r) {
+      if (!r.ok) throw new Error("missing station " + id);
+      return r.json();
+    }).catch(function (e) { delete linzCache[id]; throw e; });
+    return linzCache[id];
   }
 
   // LINZ gives highs and lows only; draw a smooth tide curve between them.
@@ -755,29 +725,25 @@
   }
 
   function loadLinz(l) {
-    var best = null, bestD = Infinity;
-    LINZ_PORTS.forEach(function (p) {
-      var dk = distKm(l.lat, l.lon, p.lat, p.lon);
-      if (dk < bestD) { bestD = dk; best = p; }
-    });
-    if (!best || bestD > LINZ_MAX_KM) return Promise.reject(new Error("no port nearby"));
-    var today = state.data.current.time;
-    var yr = +today.slice(0, 4), mon = +today.slice(5, 7);
-    var jobs = [fetchLinzYear(best.slug, yr)];
-    if (mon === 12) jobs.push(fetchLinzYear(best.slug, yr + 1).catch(function () { return []; }));
-    if (mon === 1) jobs.push(fetchLinzYear(best.slug, yr - 1).catch(function () { return []; }));
-    return Promise.all(jobs).then(function (lists) {
-      var all = [].concat.apply([], lists);
-      all.forEach(function (e) { e.ms = timeMs(e.t); });
-      all.sort(function (a, b) { return a.ms - b.ms; });
-      var from = timeMs(today) - 2 * 86400000, to = timeMs(today) + 6 * 86400000;
-      var turns = all.filter(function (e) { return e.ms >= from && e.ms <= to; });
-      if (turns.length < 4) throw new Error("dates not covered");
-      turns = turns.map(function (e, i) {
-        var nb = turns[i - 1] || turns[i + 1];
-        return { t: e.t, v: e.v, ms: e.ms, type: e.v > nb.v ? "H" : "L" };
+    return getLinzIndex().then(function (idx) {
+      var best = null, bestD = Infinity;
+      (idx.stations || []).forEach(function (st) {
+        var dk = distKm(l.lat, l.lon, st.lat, st.lon);
+        if (dk < bestD) { bestD = dk; best = st; }
       });
-      return { source: "linz", station: best.name, distKm: bestD, points: curveFromTurns(turns), hilo: turns };
+      if (!best || bestD > LINZ_MAX_KM) throw new Error("no station nearby");
+      return getLinzStation(best.id).then(function (st) {
+        var today = state.data.current.time;
+        var from = timeMs(today) - 2 * 86400000, to = timeMs(today) + 6 * 86400000;
+        var turns = st.events.map(function (e) { return { t: e[0], v: e[1], ms: timeMs(e[0]) }; })
+          .filter(function (e) { return e.ms >= from && e.ms <= to; });
+        if (turns.length < 4) throw new Error("dates not covered");
+        turns = turns.map(function (e, i) {
+          var nb = turns[i - 1] || turns[i + 1];
+          return { t: e.t, v: e.v, ms: e.ms, type: e.v > nb.v ? "H" : "L" };
+        });
+        return { source: "linz", station: st.name, distKm: bestD, points: curveFromTurns(turns), hilo: turns };
+      });
     });
   }
 
@@ -850,7 +816,19 @@
     var W = 960, H = 250, L = 42, R = 14, T = 12, B = 30, bottom = H - B;
     var step = (W - L - R) / (n - 1);
     var x = function (i) { return L + i * step; };
-    var xm = function (ms) { return L + (ms - start) / 3600000 * step; };
+    // Map a time to the chart using the hourly axis, so daylight-saving changes line up with the labels
+    var tms = times.map(timeMs);
+    var xm = function (ms) {
+      if (ms <= tms[0]) return L + (ms - tms[0]) / 3600000 * step;
+      for (var k = 0; k < tms.length - 1; k++) {
+        if (ms < tms[k + 1]) return x(k) + (ms - tms[k]) / (tms[k + 1] - tms[k]) * step;
+      }
+      return x(tms.length - 1) + (ms - tms[tms.length - 1]) / 3600000 * step;
+    };
+    var msAtX = function (px) {
+      var f = (px - L) / step, k = Math.max(0, Math.min(tms.length - 2, Math.floor(f)));
+      return tms[k] + Math.max(0, Math.min(1, f - k)) * (tms[k + 1] - tms[k]);
+    };
     var vals = pts.map(function (p) { return dv(p.v); });
     var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals), range = Math.max(hi - lo, 0.2);
     var gs = range <= 1.5 ? 0.25 : range <= 3 ? 0.5 : range <= 8 ? 1 : 2;
@@ -898,7 +876,7 @@
     function show(e) {
       var rect = svg.getBoundingClientRect();
       var px = (e.clientX - rect.left) / rect.width * W;
-      var ms = start + (px - L) / step * 3600000;
+      var ms = msAtX(px);
       ms = Math.round(ms / 600000) * 600000; // nearest 10 minutes
       ms = Math.max(start, Math.min(end, ms));
       var v = tideAt(t.points, ms);
