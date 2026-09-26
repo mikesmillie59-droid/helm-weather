@@ -142,8 +142,11 @@
   .sw.wind { background: var(--sea); border-top: 2.5px solid var(--sea-strong); }
   .sw.gust { height: 0; border-top: 2.5px dashed var(--magenta); }
   .sw.night { background: var(--night); border: 1px solid var(--line); }
-  #readout { min-height: 1.5em; font-weight: 500; margin: 4px 0 6px; }
+  .sw.now { height: 0; width: 14px; border-top: 2.5px dashed var(--magenta); }
+  #readout, #tideReadout { min-height: 1.5em; font-weight: 500; margin: 4px 0 6px; }
+  .tide-now { font-family: var(--num); font-size: 1.45rem; font-weight: 600; margin: 0 0 6px; line-height: 1.25; }
   .chart-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  #tideChart { display: block; width: 100%; min-width: 720px; height: auto; touch-action: pan-x pan-y; }
   #chart { display: block; width: 100%; min-width: 720px; height: auto; touch-action: pan-x pan-y; }
 
   /* Days */
@@ -210,6 +213,19 @@
     <dl class="readings" id="readings"></dl>
   </section>
 
+  <section aria-label="Tides">
+    <h2>Tides</h2>
+    <p class="tide-now" id="tideNow">Loading tides…</p>
+    <div class="legend">
+      <span><i class="sw wind"></i>Tide height</span>
+      <span><i class="sw now"></i>Now</span>
+      <span><i class="sw night"></i>Night</span>
+    </div>
+    <p id="tideReadout">Touch the chart to see the tide at any time.</p>
+    <div class="chart-scroll"><svg id="tideChart" viewBox="0 0 960 250"></svg></div>
+    <p class="hint" id="tideSource"></p>
+  </section>
+
   <section aria-label="Wind outlook">
     <h2>Wind for the next 3 days</h2>
     <div class="legend">
@@ -236,7 +252,7 @@
     <button type="button" data-units="us">US (°F, inHg)</button>
   </div>
   <p id="updated">&nbsp;</p>
-  <p>Wind in knots, visibility in nautical miles. Forecast data from Open-Meteo. Map from OpenStreetMap and OpenSeaMap.</p>
+  <p>Wind in knots, visibility in nautical miles. Forecast data from Open-Meteo. Tide predictions from LINZ (Toitū Te Whenua) and NOAA. Map from OpenStreetMap and OpenSeaMap.</p>
   <p>This is a planning aid, not an official forecast. Always check MetService (NZ) or the National Weather Service (US) before heading out.</p>
 </footer>
 
@@ -254,7 +270,7 @@
     set: function (k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
   };
 
-  var state = { loc: null, data: null, units: store.get("units") || "auto", fetchedAt: 0 };
+  var state = { loc: null, data: null, tide: null, units: store.get("units") || "auto", fetchedAt: 0 };
 
   // ---------- Lookups ----------
   var WMO = {
@@ -343,6 +359,7 @@
         countryName: m.countryName || ""
       };
       store.set("loc", state.loc);
+      state.tide = null;
       return loadForecast();
     });
   }
@@ -381,6 +398,7 @@
       state.fetchedAt = Date.now();
       setStatus("");
       render();
+      loadTides();
     }).catch(function () {
       $("placeName").textContent = state.loc.name;
       setStatus("Couldn't load the forecast. Check your internet connection, then tap Refresh.", true);
@@ -433,6 +451,7 @@
 
     renderChart(d, idx);
     renderDays(d);
+    renderTides();
     renderUnits();
 
     var tz = d.timezone_abbreviation ? " (" + d.timezone_abbreviation + ")" : "";
@@ -481,23 +500,7 @@
     var bottom = H - B;
     var s = "";
 
-    // Night shading from sunrise/sunset
-    var sun = {};
-    dl.time.forEach(function (t, i) { sun[t] = [dl.sunrise[i], dl.sunset[i]]; });
-    var runStart = -1;
-    for (var i = 0; i <= n; i++) {
-      var t = times[i], night = false;
-      if (i < n) {
-        var ss = sun[t.slice(0, 10)];
-        night = ss ? (t < ss[0] || t >= ss[1]) : false;
-      }
-      if (night && runStart < 0) runStart = i;
-      if (!night && runStart >= 0) {
-        var x0 = Math.max(L, x(runStart) - step / 2), x1 = Math.min(W - R, x(i - 1) + step / 2);
-        s += '<rect x="' + x0.toFixed(1) + '" y="' + T + '" width="' + (x1 - x0).toFixed(1) + '" height="' + (bottom - T) + '" fill="var(--night)"/>';
-        runStart = -1;
-      }
-    }
+    s += nightShade(d, times, x, step, L, W - R, T, bottom);
 
     // Grid
     for (var g = 0; g <= yMax; g += gridStep) {
@@ -506,19 +509,10 @@
     }
     s += '<text x="' + (L - 8) + '" y="' + (T - 2) + '" text-anchor="end" font-size="11" fill="var(--muted)" font-family="Barlow, sans-serif">kn</text>';
 
-    // Day dividers and time labels
-    var labelledStart = false;
+    // Day dividers, time labels and direction arrows
+    s += timeAxis(times, x, H, T);
     times.forEach(function (t, i) {
       var hr = t.slice(11, 13);
-      if (hr === "00") {
-        s += '<line x1="' + x(i) + '" x2="' + x(i) + '" y1="' + T + '" y2="' + (H - 4) + '" stroke="var(--muted)" stroke-width="1" stroke-opacity="0.5"/>';
-        s += '<text x="' + (x(i) + 5) + '" y="' + (H - 6) + '" font-size="14" font-weight="600" fill="var(--ink)" font-family="Barlow, sans-serif">' + dayLabel(t) + "</text>";
-      } else if (i === 0) {
-        labelledStart = true;
-        s += '<text x="' + x(0) + '" y="' + (H - 6) + '" font-size="14" font-weight="600" fill="var(--ink)" font-family="Barlow, sans-serif">Now</text>';
-      } else if ((hr === "06" || hr === "12" || hr === "18") && !(labelledStart && i < 4)) {
-        s += '<text x="' + x(i) + '" y="' + (H - 6) + '" text-anchor="middle" font-size="12" fill="var(--muted)" font-family="Barlow, sans-serif">' + hr + ":00</text>";
-      }
       if (+hr % 3 === 0 && wd[i] != null) {
         s += '<path d="M0,-7 L4.5,4 L0,1.5 L-4.5,4 Z" fill="var(--ink)" transform="translate(' + x(i).toFixed(1) + "," + (bottom + 17) + ") rotate(" + ((wd[i] + 180) % 360) + ')"/>';
       }
@@ -555,6 +549,384 @@
     }
     $("hit").addEventListener("pointermove", show);
     $("hit").addEventListener("pointerdown", show);
+  }
+
+  // ---------- Shared chart helpers ----------
+  function timeMs(s) {
+    return Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10), +s.slice(11, 13) || 0, +s.slice(14, 16) || 0);
+  }
+  function msToStr(ms) {
+    var dt = new Date(ms);
+    var p = function (v) { return String(v).padStart(2, "0"); };
+    return dt.getUTCFullYear() + "-" + p(dt.getUTCMonth() + 1) + "-" + p(dt.getUTCDate()) + "T" + p(dt.getUTCHours()) + ":" + p(dt.getUTCMinutes());
+  }
+
+  function nightShade(d, times, x, step, left, right, top, bottom) {
+    var dl = d.daily, sun = {}, s = "", runStart = -1, n = times.length;
+    dl.time.forEach(function (t, i) { sun[t] = [dl.sunrise[i], dl.sunset[i]]; });
+    for (var i = 0; i <= n; i++) {
+      var night = false;
+      if (i < n) {
+        var ss = sun[times[i].slice(0, 10)];
+        night = ss ? (times[i] < ss[0] || times[i] >= ss[1]) : false;
+      }
+      if (night && runStart < 0) runStart = i;
+      if (!night && runStart >= 0) {
+        var x0 = Math.max(left, x(runStart) - step / 2), x1 = Math.min(right, x(i - 1) + step / 2);
+        s += '<rect x="' + x0.toFixed(1) + '" y="' + top + '" width="' + (x1 - x0).toFixed(1) + '" height="' + (bottom - top) + '" fill="var(--night)"/>';
+        runStart = -1;
+      }
+    }
+    return s;
+  }
+
+  function timeAxis(times, x, H, T) {
+    var s = "", labelledStart = false;
+    times.forEach(function (t, i) {
+      var hr = t.slice(11, 13);
+      if (hr === "00") {
+        s += '<line x1="' + x(i) + '" x2="' + x(i) + '" y1="' + T + '" y2="' + (H - 4) + '" stroke="var(--muted)" stroke-width="1" stroke-opacity="0.5"/>';
+        s += '<text x="' + (x(i) + 5) + '" y="' + (H - 6) + '" font-size="14" font-weight="600" fill="var(--ink)" font-family="Barlow, sans-serif">' + dayLabel(t) + "</text>";
+      } else if (i === 0) {
+        labelledStart = true;
+        s += '<text x="' + x(0) + '" y="' + (H - 6) + '" font-size="14" font-weight="600" fill="var(--ink)" font-family="Barlow, sans-serif">Now</text>';
+      } else if ((hr === "06" || hr === "12" || hr === "18") && !(labelledStart && i < 4)) {
+        s += '<text x="' + x(i) + '" y="' + (H - 6) + '" text-anchor="middle" font-size="12" fill="var(--muted)" font-family="Barlow, sans-serif">' + hr + ":00</text>";
+      }
+    });
+    return s;
+  }
+
+  // ---------- Tides ----------
+  // US: official NOAA predictions from the nearest tide station.
+  // Elsewhere (and if NOAA fails): estimated tide from the Open-Meteo ocean model.
+  function inUS() {
+    var l = state.loc;
+    if (l && l.country) return l.country === "US";
+    var tz = state.data ? state.data.timezone || "" : "";
+    return US_TZ.test(tz) || tz === "Pacific/Honolulu";
+  }
+
+  function distKm(a1, o1, a2, o2) {
+    var r = Math.PI / 180, dA = (a2 - a1) * r, dO = (o2 - o1) * r;
+    var h = Math.sin(dA / 2) * Math.sin(dA / 2) + Math.cos(a1 * r) * Math.cos(a2 * r) * Math.sin(dO / 2) * Math.sin(dO / 2);
+    return 12742 * Math.asin(Math.sqrt(h));
+  }
+
+  var noaaStations = null;
+  function getNoaaStations() {
+    if (noaaStations) return Promise.resolve(noaaStations);
+    return fetch("https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json?type=tidepredictions")
+      .then(function (r) { if (!r.ok) throw new Error("stations"); return r.json(); })
+      .then(function (j) {
+        noaaStations = (j.stations || []).map(function (s) {
+          return { id: s.id, name: s.name, state: s.state, lat: +s.lat, lng: +s.lng };
+        });
+        return noaaStations;
+      });
+  }
+
+  function loadNoaa(l, day) {
+    return getNoaaStations().then(function (list) {
+      var best = null, bestD = Infinity;
+      list.forEach(function (s) {
+        var dk = distKm(l.lat, l.lon, s.lat, s.lng);
+        if (dk < bestD) { bestD = dk; best = s; }
+      });
+      if (!best || bestD > 60) throw new Error("no nearby station");
+      var base = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions&application=HelmWeather" +
+        "&datum=MLLW&time_zone=lst_ldt&units=metric&format=json&range=96&begin_date=" + day + "&station=" + best.id;
+      return Promise.all([
+        fetch(base + "&interval=h").then(function (r) { return r.json(); }),
+        fetch(base + "&interval=hilo").then(function (r) { return r.json(); })
+      ]).then(function (res) {
+        if (!res[0].predictions) throw new Error("no predictions");
+        return {
+          source: "noaa",
+          station: best.name + (best.state ? ", " + best.state : ""),
+          distKm: bestD,
+          points: res[0].predictions.map(function (p) { return { t: p.t.replace(" ", "T"), v: +p.v }; }),
+          hilo: (res[1].predictions || []).map(function (p) { return { t: p.t.replace(" ", "T"), v: +p.v, type: p.type === "H" ? "H" : "L" }; })
+        };
+      });
+    });
+  }
+
+  function findTurns(pts) {
+    var out = [];
+    for (var i = 1; i < pts.length - 1; i++) {
+      var a = pts[i - 1].v, b = pts[i].v, c = pts[i + 1].v;
+      var high = b > a && b >= c, low = b < a && b <= c;
+      if (!high && !low) continue;
+      var den = a - 2 * b + c;
+      var off = den ? (a - c) / (2 * den) : 0;
+      off = Math.max(-0.5, Math.min(0.5, off));
+      out.push({ t: msToStr(timeMs(pts[i].t) + off * 3600000), v: b - (a - c) * off / 4, type: high ? "H" : "L" });
+    }
+    return out;
+  }
+
+  function loadModelTide(l) {
+    // If the exact spot is on land for the ocean model, try nearby points out on the water.
+    var offsets = [[0, 0], [0.08, 0], [-0.08, 0], [0, 0.08], [0, -0.08], [0.16, 0], [-0.16, 0], [0, 0.16], [0, -0.16]];
+    function attempt(k) {
+      if (k >= offsets.length) return Promise.reject(new Error("no sea point"));
+      var la = +(l.lat + offsets[k][0]).toFixed(3), lo = +(l.lon + offsets[k][1]).toFixed(3);
+      var url = "https://marine-api.open-meteo.com/v1/marine?latitude=" + la + "&longitude=" + lo +
+        "&hourly=sea_level_height_msl&timezone=auto&forecast_days=4";
+      return fetch(url).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+        var h = j && j.hourly;
+        var vals = h && h.sea_level_height_msl;
+        if (!vals || vals.filter(function (v) { return v != null; }).length < 24) return attempt(k + 1);
+        var pts = h.time.map(function (t, i) { return { t: t, v: vals[i] }; }).filter(function (p) { return p.v != null; });
+        return { source: "model", moved: k > 0, points: pts, hilo: findTurns(pts) };
+      });
+    }
+    return attempt(0);
+  }
+
+  // ---------- LINZ (New Zealand) ----------
+  // Tide tables are CSV files downloaded from LINZ and uploaded to the same GitHub repo,
+  // named tide-<port>-<year>.csv, e.g. tide-auckland-2026.csv
+  var LINZ_PORTS = [
+    { slug: "marsden-point", name: "Marsden Point", lat: -35.838, lon: 174.498 },
+    { slug: "auckland", name: "Auckland", lat: -36.843, lon: 174.767 },
+    { slug: "onehunga", name: "Onehunga", lat: -36.928, lon: 174.786 },
+    { slug: "tauranga", name: "Tauranga", lat: -37.645, lon: 176.180 },
+    { slug: "gisborne", name: "Gisborne", lat: -38.673, lon: 178.023 },
+    { slug: "port-taranaki", name: "Port Taranaki", lat: -39.058, lon: 174.035 },
+    { slug: "napier", name: "Napier", lat: -39.475, lon: 176.917 },
+    { slug: "wellington", name: "Wellington", lat: -41.285, lon: 174.780 },
+    { slug: "picton", name: "Picton", lat: -41.290, lon: 174.005 },
+    { slug: "nelson", name: "Nelson", lat: -41.260, lon: 173.270 },
+    { slug: "westport", name: "Westport", lat: -41.738, lon: 171.600 },
+    { slug: "lyttelton", name: "Lyttelton", lat: -43.607, lon: 172.720 },
+    { slug: "timaru", name: "Timaru", lat: -44.388, lon: 171.258 },
+    { slug: "port-chalmers", name: "Port Chalmers", lat: -45.815, lon: 170.620 },
+    { slug: "dunedin", name: "Dunedin", lat: -45.880, lon: 170.515 },
+    { slug: "bluff", name: "Bluff", lat: -46.598, lon: 168.347 }
+  ];
+  var LINZ_MAX_KM = 40;
+  var linzCache = {};
+
+  function fetchLinzYear(slug, year) {
+    var key = slug + "-" + year;
+    if (linzCache[key]) return linzCache[key];
+    linzCache[key] = fetch("tide-" + key + ".csv", { cache: "no-cache" }).then(function (r) {
+      if (!r.ok) throw new Error("missing " + key);
+      return r.text();
+    }).then(parseLinz).catch(function (e) { delete linzCache[key]; throw e; });
+    return linzCache[key];
+  }
+
+  // LINZ CSV rows: day, weekday, month, year, then up to four pairs of time (hh:mm) and height (m)
+  function parseLinz(text) {
+    var ev = [];
+    text.split(/\r?\n/).forEach(function (line) {
+      var f = line.split(",").map(function (c) { return c.trim().replace(/^"|"$/g, ""); });
+      if (f.length < 6) return;
+      var day = +f[0], mon = +f[2], yr = +f[3];
+      if (!(day >= 1 && day <= 31 && mon >= 1 && mon <= 12 && yr > 2000)) return;
+      for (var k = 4; k + 1 < f.length; k += 2) {
+        var m = /^(\d{1,2}):?(\d{2})$/.exec(f[k]);
+        var h = parseFloat(f[k + 1]);
+        if (!m || isNaN(h)) continue;
+        var p = function (v) { return String(v).padStart(2, "0"); };
+        ev.push({ t: yr + "-" + p(mon) + "-" + p(day) + "T" + p(m[1]) + ":" + m[2], v: h });
+      }
+    });
+    if (!ev.length) throw new Error("no rows");
+    return ev;
+  }
+
+  // LINZ gives highs and lows only; draw a smooth tide curve between them.
+  function curveFromTurns(turns) {
+    var pts = [];
+    for (var i = 0; i < turns.length - 1; i++) {
+      var a = turns[i], b = turns[i + 1];
+      for (var ms = a.ms; ms < b.ms; ms += 20 * 60000) {
+        var f = (ms - a.ms) / (b.ms - a.ms);
+        pts.push({ t: msToStr(ms), v: a.v + (b.v - a.v) * (1 - Math.cos(Math.PI * f)) / 2 });
+      }
+    }
+    var last = turns[turns.length - 1];
+    pts.push({ t: last.t, v: last.v });
+    return pts;
+  }
+
+  function loadLinz(l) {
+    var best = null, bestD = Infinity;
+    LINZ_PORTS.forEach(function (p) {
+      var dk = distKm(l.lat, l.lon, p.lat, p.lon);
+      if (dk < bestD) { bestD = dk; best = p; }
+    });
+    if (!best || bestD > LINZ_MAX_KM) return Promise.reject(new Error("no port nearby"));
+    var today = state.data.current.time;
+    var yr = +today.slice(0, 4), mon = +today.slice(5, 7);
+    var jobs = [fetchLinzYear(best.slug, yr)];
+    if (mon === 12) jobs.push(fetchLinzYear(best.slug, yr + 1).catch(function () { return []; }));
+    if (mon === 1) jobs.push(fetchLinzYear(best.slug, yr - 1).catch(function () { return []; }));
+    return Promise.all(jobs).then(function (lists) {
+      var all = [].concat.apply([], lists);
+      all.forEach(function (e) { e.ms = timeMs(e.t); });
+      all.sort(function (a, b) { return a.ms - b.ms; });
+      var from = timeMs(today) - 2 * 86400000, to = timeMs(today) + 6 * 86400000;
+      var turns = all.filter(function (e) { return e.ms >= from && e.ms <= to; });
+      if (turns.length < 4) throw new Error("dates not covered");
+      turns = turns.map(function (e, i) {
+        var nb = turns[i - 1] || turns[i + 1];
+        return { t: e.t, v: e.v, ms: e.ms, type: e.v > nb.v ? "H" : "L" };
+      });
+      return { source: "linz", station: best.name, distKm: bestD, points: curveFromTurns(turns), hilo: turns };
+    });
+  }
+
+  function loadTides() {
+    if (!state.data || !state.loc) return;
+    var l = state.loc, key = l.lat + "," + l.lon;
+    var day = state.data.current.time.slice(0, 10).replace(/-/g, "");
+    var fallback = function () { return loadModelTide(l); };
+    var job = inUS() ? loadNoaa(l, day).catch(fallback) : loadLinz(l).catch(fallback);
+    job.then(function (t) {
+      if (!state.loc || state.loc.lat + "," + state.loc.lon !== key) return;
+      t.points.forEach(function (p) { p.ms = timeMs(p.t); });
+      t.hilo.forEach(function (p) { p.ms = timeMs(p.t); });
+      state.tide = t;
+      renderTides();
+    }).catch(function () {
+      if (!state.loc || state.loc.lat + "," + state.loc.lon !== key) return;
+      state.tide = { error: true };
+      renderTides();
+    });
+  }
+
+  function tideAt(pts, ms) {
+    for (var i = 0; i < pts.length - 1; i++) {
+      if (ms >= pts[i].ms && ms <= pts[i + 1].ms) {
+        var f = (ms - pts[i].ms) / (pts[i + 1].ms - pts[i].ms);
+        return pts[i].v + f * (pts[i + 1].v - pts[i].v);
+      }
+    }
+    return null;
+  }
+
+  function renderTides() {
+    var d = state.data, t = state.tide, svg = $("tideChart");
+    if (!d) return;
+    if (!t) { $("tideNow").textContent = "Loading tides…"; svg.innerHTML = ""; $("tideSource").textContent = ""; return; }
+    if (t.error) {
+      $("tideNow").textContent = "No tide data for this spot.";
+      $("tideSource").textContent = "Tides need a spot on the coast or open water. Try picking one closer to the sea.";
+      svg.innerHTML = "";
+      return;
+    }
+
+    var imp = imperial(), unit = imp ? "ft" : "m";
+    var dv = function (v) { return imp ? v * 3.28084 : v; };
+    var fmtH = function (v) { return dv(v).toFixed(1) + " " + unit; };
+
+    var idx = currentIndex(d);
+    var n = Math.min(72, d.hourly.time.length - idx);
+    var times = d.hourly.time.slice(idx, idx + n);
+    var start = timeMs(times[0]), end = timeMs(times[n - 1]), nowMs = timeMs(d.current.time);
+    var pts = t.points.filter(function (p) { return p.ms >= start - 3600000 && p.ms <= end + 3600000; });
+    if (pts.length < 2) { $("tideNow").textContent = "No tide data for these dates."; svg.innerHTML = ""; return; }
+    var turns = t.hilo.filter(function (p) { return p.ms >= start && p.ms <= end; });
+
+    // Summary line
+    var ahead = t.hilo.filter(function (p) { return p.ms > nowMs; });
+    var cur = tideAt(t.points, nowMs);
+    var word = function (p) { return p.type === "H" ? "high" : "low"; };
+    var summary = "";
+    if (ahead.length) {
+      summary = (ahead[0].type === "H" ? "Rising" : "Falling") + (cur != null ? ", now " + fmtH(cur) : "") +
+        ". Next " + word(ahead[0]) + " " + hhmm(ahead[0].t) + " (" + fmtH(ahead[0].v) + ")";
+      if (ahead[1]) summary += ", then " + word(ahead[1]) + " " + hhmm(ahead[1].t) + " (" + fmtH(ahead[1].v) + ")";
+      summary += ".";
+    }
+    $("tideNow").textContent = summary;
+
+    // Scales
+    var W = 960, H = 250, L = 42, R = 14, T = 12, B = 30, bottom = H - B;
+    var step = (W - L - R) / (n - 1);
+    var x = function (i) { return L + i * step; };
+    var xm = function (ms) { return L + (ms - start) / 3600000 * step; };
+    var vals = pts.map(function (p) { return dv(p.v); });
+    var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals), range = Math.max(hi - lo, 0.2);
+    var gs = range <= 1.5 ? 0.25 : range <= 3 ? 0.5 : range <= 8 ? 1 : 2;
+    var yMin = Math.floor((lo - range * 0.28) / gs) * gs, yMax = Math.ceil((hi + range * 0.28) / gs) * gs;
+    var y = function (v) { return T + (bottom - T) * (1 - (dv(v) - yMin) / (yMax - yMin)); };
+    var yd = function (disp) { return T + (bottom - T) * (1 - (disp - yMin) / (yMax - yMin)); };
+    var dec = gs < 0.5 ? 2 : gs < 1 ? 1 : 0;
+
+    var s = nightShade(d, times, x, step, L, W - R, T, bottom);
+    for (var g = yMin; g <= yMax + 1e-9; g += gs) {
+      s += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + yd(g).toFixed(1) + '" y2="' + yd(g).toFixed(1) + '" stroke="var(--line)" stroke-width="1"/>';
+      s += '<text x="' + (L - 8) + '" y="' + (yd(g) + 4).toFixed(1) + '" text-anchor="end" font-size="12" fill="var(--muted)" font-family="Barlow, sans-serif">' + g.toFixed(dec) + "</text>";
+    }
+    s += '<text x="' + (L - 8) + '" y="' + (T + 2) + '" text-anchor="end" font-size="11" fill="var(--muted)" font-family="Barlow, sans-serif">' + unit + "</text>";
+    s += timeAxis(times, x, H, T);
+
+    // Clip the curve to the chart area
+    s += '<defs><clipPath id="tclip"><rect x="' + L + '" y="0" width="' + (W - L - R) + '" height="' + bottom + '"/></clipPath></defs>';
+    var path = pts.map(function (p, i) { return (i ? "L" : "M") + xm(p.ms).toFixed(1) + "," + y(p.v).toFixed(1); }).join(" ");
+    s += '<g clip-path="url(#tclip)">';
+    s += '<path d="' + path + " L" + xm(pts[pts.length - 1].ms).toFixed(1) + "," + bottom + " L" + xm(pts[0].ms).toFixed(1) + "," + bottom + ' Z" fill="var(--sea)" fill-opacity="0.85"/>';
+    s += '<path d="' + path + '" fill="none" stroke="var(--sea-strong)" stroke-width="2.5" stroke-linejoin="round"/>';
+    s += "</g>";
+
+    // High and low labels
+    turns.forEach(function (p) {
+      var px = xm(p.ms), py = y(p.v), up = p.type === "H";
+      s += '<circle cx="' + px.toFixed(1) + '" cy="' + py.toFixed(1) + '" r="3.5" fill="var(--ink)"/>';
+      s += '<text x="' + px.toFixed(1) + '" y="' + (up ? py - 20 : py + 18).toFixed(1) + '" text-anchor="middle" font-size="13" font-weight="600" fill="var(--ink)" font-family="Barlow, sans-serif">' + hhmm(p.t) + "</text>";
+      s += '<text x="' + px.toFixed(1) + '" y="' + (up ? py - 7 : py + 31).toFixed(1) + '" text-anchor="middle" font-size="12" fill="var(--muted)" font-family="Barlow, sans-serif">' + dv(p.v).toFixed(1) + " " + unit + "</text>";
+    });
+
+    // Now marker
+    if (cur != null && nowMs >= start) {
+      var nx = xm(nowMs).toFixed(1);
+      s += '<line x1="' + nx + '" x2="' + nx + '" y1="' + T + '" y2="' + bottom + '" stroke="var(--magenta)" stroke-width="2" stroke-dasharray="5 4"/>';
+      s += '<circle cx="' + nx + '" cy="' + y(cur).toFixed(1) + '" r="5.5" fill="var(--magenta)" stroke="var(--panel)" stroke-width="2"/>';
+    }
+
+    s += '<line id="tideCursor" x1="0" x2="0" y1="' + T + '" y2="' + bottom + '" stroke="var(--ink)" stroke-width="1.5" visibility="hidden"/>';
+    s += '<rect id="tideHit" x="' + L + '" y="0" width="' + (W - L - R) + '" height="' + H + '" fill="transparent"/>';
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    svg.innerHTML = s;
+
+    function show(e) {
+      var rect = svg.getBoundingClientRect();
+      var px = (e.clientX - rect.left) / rect.width * W;
+      var ms = start + (px - L) / step * 3600000;
+      ms = Math.round(ms / 600000) * 600000; // nearest 10 minutes
+      ms = Math.max(start, Math.min(end, ms));
+      var v = tideAt(t.points, ms);
+      if (v == null) return;
+      var cx = xm(ms).toFixed(1), cursor = $("tideCursor");
+      cursor.setAttribute("x1", cx);
+      cursor.setAttribute("x2", cx);
+      cursor.setAttribute("visibility", "visible");
+      var nxt = t.hilo.filter(function (p) { return p.ms > ms; })[0];
+      var ts = msToStr(ms);
+      $("tideReadout").textContent = dayLabel(ts) + ", " + hhmm(ts) + ": " + fmtH(v) + (nxt ? (nxt.type === "H" ? ", rising" : ", falling") : "");
+    }
+    $("tideHit").addEventListener("pointermove", show);
+    $("tideHit").addEventListener("pointerdown", show);
+
+    // Where the numbers come from
+    if (t.source === "noaa") {
+      $("tideSource").textContent = "Official NOAA tide predictions for " + t.station + " (" + Math.round(t.distKm) +
+        " km away). Heights are above chart datum (MLLW), so they match US charts.";
+    } else if (t.source === "linz") {
+      $("tideSource").textContent = "LINZ tide predictions for " + t.station + " (" + Math.round(t.distKm) +
+        " km away). Heights are above chart datum, so they match NZ charts. Away from the port, times and heights can differ, " +
+        "especially up harbours and estuaries.";
+    } else {
+      $("tideSource").textContent = (t.moved ? "Using the nearest open-water point. " : "") +
+        "Estimated from an ocean model (Open-Meteo). Heights are measured from mean sea level, not chart datum, " +
+        "and times can differ from official tide tables, especially inside harbours and estuaries. Check LINZ or NOAA tables before relying on them.";
+    }
   }
 
   function renderDays(d) {
