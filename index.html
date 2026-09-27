@@ -149,17 +149,18 @@
   .sw.gust { height: 0; border-top: 2.5px dashed var(--magenta); }
   .sw.night { background: var(--night); border: 1px solid var(--line); }
   .sw.now { height: 0; width: 14px; border-top: 2.5px dashed var(--magenta); }
-  #readout, #tideReadout { min-height: 1.5em; font-weight: 500; margin: 4px 0 6px; }
+  .sw.swell { height: 0; border-top: 2.5px dashed var(--ink); }
+  #readout, #tideReadout, #seaReadout { min-height: 1.5em; font-weight: 500; margin: 4px 0 6px; }
   .tide-now { font-family: var(--num); font-size: 1.45rem; font-weight: 600; margin: 0 0 6px; line-height: 1.25; }
   .chart-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-  #tideChart { display: block; width: 100%; min-width: 720px; height: auto; touch-action: pan-x pan-y; }
+  #tideChart, #seaChart { display: block; width: 100%; min-width: 720px; height: auto; touch-action: pan-x pan-y; }
   #chart { display: block; width: 100%; min-width: 720px; height: auto; touch-action: pan-x pan-y; }
 
   /* Days */
   .days { margin: 0; padding: 0; list-style: none; }
   .day {
     display: grid;
-    grid-template-columns: 7.5rem 1fr 1fr 1.2fr 0.8fr 1fr;
+    grid-template-columns: 7.5rem 1fr 1fr 1.2fr 1fr 0.8fr 1fr;
     gap: 6px 18px;
     align-items: center;
     padding: 14px 0 14px 14px;
@@ -232,6 +233,20 @@
     <p class="hint" id="tideSource"></p>
   </section>
 
+  <section aria-label="Sea state">
+    <h2>Sea state</h2>
+    <p class="tide-now" id="seaNow">Loading sea conditions…</p>
+    <div class="legend">
+      <span><i class="sw wind"></i>Wave height</span>
+      <span><i class="sw swell"></i>Swell</span>
+      <span><i class="sw night"></i>Night</span>
+      <span>Arrows show which way the waves are travelling</span>
+    </div>
+    <p id="seaReadout">Touch the chart to see any hour.</p>
+    <div class="chart-scroll"><svg id="seaChart" viewBox="0 0 960 250"></svg></div>
+    <p class="hint" id="seaSource"></p>
+  </section>
+
   <section aria-label="Wind outlook">
     <h2>Wind for the next 3 days</h2>
     <div class="legend">
@@ -258,7 +273,7 @@
     <button type="button" data-units="us">US (°F, inHg)</button>
   </div>
   <p id="updated">&nbsp;</p>
-  <p>Wind in knots, visibility in nautical miles. Forecast data from Open-Meteo. Tide predictions from LINZ (Toitū Te Whenua) and NOAA. Map from OpenStreetMap and OpenSeaMap.</p>
+  <p>Wind in knots, visibility in nautical miles. Forecast and wave data from Open-Meteo. Tide predictions from LINZ (Toitū Te Whenua) and NOAA. Map from OpenStreetMap and OpenSeaMap.</p>
   <p>This is a planning aid, not an official forecast. Always check MetService (NZ) or the National Weather Service (US) before heading out.</p>
 </footer>
 
@@ -276,7 +291,7 @@
     set: function (k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
   };
 
-  var state = { loc: null, data: null, tide: null, units: store.get("units") || "auto", fetchedAt: 0 };
+  var state = { loc: null, data: null, tide: null, sea: null, units: store.get("units") || "auto", fetchedAt: 0 };
 
   // ---------- Lookups ----------
   var WMO = {
@@ -366,6 +381,7 @@
       };
       store.set("loc", state.loc);
       state.tide = null;
+      state.sea = null;
       return loadForecast();
     });
   }
@@ -405,6 +421,7 @@
       setStatus("");
       render();
       loadTides();
+      loadSea();
     }).catch(function () {
       $("placeName").textContent = state.loc.name;
       setStatus("Couldn't load the forecast. Check your internet connection, then tap Refresh.", true);
@@ -446,6 +463,7 @@
       ["Conditions", WMO[c.weather_code] || "–", ""],
       ["Temperature", fmt.temp(c.temperature_2m), "Feels like " + fmt.temp(c.apparent_temperature)],
       ["Pressure", fmt.pres(c.pressure_msl), trend],
+      seaReading(),
       ["Visibility", fmt.vis(h.visibility[idx]), ""],
       ["Chance of rain", rain == null ? "–" : rain + "%", "This hour"],
       ["Cloud cover", c.cloud_cover + "%", ""],
@@ -458,6 +476,7 @@
     renderChart(d, idx);
     renderDays(d);
     renderTides();
+    renderSea();
     renderUnits();
 
     var tz = d.timezone_abbreviation ? " (" + d.timezone_abbreviation + ")" : "";
@@ -913,6 +932,219 @@
     }
   }
 
+  // ---------- Sea state (waves and swell) ----------
+  // Open-Meteo marine model. Sheltered harbours are often "land" to the model,
+  // so, like the tide fallback, we step out to the nearest open-water point.
+  var DOUGLAS = [[0.1, "Calm"], [0.5, "Smooth"], [1.25, "Slight"], [2.5, "Moderate"], [4, "Rough"],
+    [6, "Very rough"], [9, "High"], [14, "Very high"], [Infinity, "Phenomenal"]];
+  function seaWord(m) {
+    for (var i = 0; i < DOUGLAS.length; i++) { if (m < DOUGLAS[i][0]) return DOUGLAS[i][1]; }
+    return "Phenomenal";
+  }
+  function seaColour(m) { return m >= 2.5 ? "var(--red)" : m >= 1.25 ? "var(--amber)" : "var(--sea-strong)"; }
+  function waveH(m) {
+    if (m == null) return "–";
+    return imperial() ? (m * 3.28084).toFixed(m * 3.28084 < 10 ? 1 : 0) + " ft" : m.toFixed(1) + " m";
+  }
+
+  function loadSea() {
+    if (!state.data || !state.loc) return;
+    var l = state.loc, key = l.lat + "," + l.lon;
+    var offsets = [[0, 0], [0.08, 0], [-0.08, 0], [0, 0.08], [0, -0.08], [0.16, 0], [-0.16, 0], [0, 0.16], [0, -0.16],
+      [0.3, 0], [-0.3, 0], [0, 0.3], [0, -0.3]];
+    function attempt(k) {
+      if (k >= offsets.length) return Promise.reject(new Error("no sea point"));
+      var la = +(l.lat + offsets[k][0]).toFixed(3), lo = +(l.lon + offsets[k][1]).toFixed(3);
+      var url = "https://marine-api.open-meteo.com/v1/marine?latitude=" + la + "&longitude=" + lo +
+        "&current=wave_height,wave_direction,wave_period,swell_wave_height,swell_wave_direction,swell_wave_period" +
+        "&hourly=wave_height,wave_direction,wave_period,wind_wave_height,swell_wave_height,swell_wave_direction,swell_wave_period" +
+        "&daily=wave_height_max,wave_direction_dominant,swell_wave_height_max" +
+        "&timezone=auto&forecast_days=4";
+      return fetch(url).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+        var h = j && j.hourly;
+        var ok = h && h.wave_height && h.wave_height.filter(function (v) { return v != null; }).length >= 24;
+        if (!ok) return attempt(k + 1);
+        j.moved = k > 0;
+        j.movedKm = k > 0 ? distKm(l.lat, l.lon, la, lo) : 0;
+        return j;
+      });
+    }
+    attempt(0).then(function (j) {
+      if (!state.loc || state.loc.lat + "," + state.loc.lon !== key) return;
+      state.sea = j;
+      render();
+    }).catch(function () {
+      if (!state.loc || state.loc.lat + "," + state.loc.lon !== key) return;
+      state.sea = { error: true };
+      render();
+    });
+  }
+
+  // Hourly sea values lined up to the forecast's hourly times
+  function seaSeries(times) {
+    var m = state.sea, pos = {};
+    m.hourly.time.forEach(function (t, i) { pos[t] = i; });
+    var pick = function (name) {
+      var arr = m.hourly[name] || [];
+      return times.map(function (t) { var i = pos[t]; return i == null ? null : arr[i]; });
+    };
+    return {
+      wh: pick("wave_height"), wd: pick("wave_direction"), wp: pick("wave_period"),
+      ww: pick("wind_wave_height"), sh: pick("swell_wave_height"), sd: pick("swell_wave_direction"), sp: pick("swell_wave_period")
+    };
+  }
+
+  function seaNowValues() {
+    var m = state.sea;
+    if (!m || m.error) return null;
+    var c = m.current || {};
+    if (c.wave_height != null) return c;
+    // No "current" block: fall back to the nearest hour
+    var key = state.data.current.time.slice(0, 13) + ":00", i = m.hourly.time.indexOf(key);
+    if (i < 0) return null;
+    return {
+      wave_height: m.hourly.wave_height[i], wave_direction: m.hourly.wave_direction[i], wave_period: m.hourly.wave_period[i],
+      swell_wave_height: m.hourly.swell_wave_height[i], swell_wave_direction: m.hourly.swell_wave_direction[i], swell_wave_period: m.hourly.swell_wave_period[i]
+    };
+  }
+
+  function seaReading() {
+    if (!state.sea) return ["Waves", "…", "Loading"];
+    var c = seaNowValues();
+    if (!c) return ["Waves", "–", "No wave data here"];
+    var bits = [seaWord(c.wave_height)];
+    if (c.wave_period != null) bits.push(Math.round(c.wave_period) + " s");
+    if (c.wave_direction != null) bits.push("from " + compass(c.wave_direction));
+    return ["Waves", waveH(c.wave_height), bits.join(", ")];
+  }
+
+  function dayWaves(date) {
+    var m = state.sea;
+    if (!m) return "Waves …";
+    if (m.error || !m.daily) return "Waves –";
+    var i = m.daily.time.indexOf(date);
+    if (i < 0 || m.daily.wave_height_max[i] == null) return "Waves –";
+    var mx = m.daily.wave_height_max[i], sw = m.daily.swell_wave_height_max ? m.daily.swell_wave_height_max[i] : null;
+    return '<span style="color:' + seaColour(mx) + ';font-weight:600">Waves ' + waveH(mx) + "</span><small>" +
+      seaWord(mx) + (sw != null ? ", swell " + waveH(sw) : "") + "</small>";
+  }
+
+  function renderSea() {
+    var d = state.data, m = state.sea, svg = $("seaChart");
+    if (!d) return;
+    if (!m) { $("seaNow").textContent = "Loading sea conditions…"; svg.innerHTML = ""; $("seaSource").textContent = ""; return; }
+    if (m.error) {
+      $("seaNow").textContent = "No wave data for this spot.";
+      $("seaSource").textContent = "Wave forecasts need a spot on the coast or open water. Try picking one closer to the sea.";
+      svg.innerHTML = "";
+      return;
+    }
+
+    // Summary line
+    var c = seaNowValues();
+    var summary = "";
+    if (c) {
+      summary = seaWord(c.wave_height) + " sea: waves " + waveH(c.wave_height);
+      if (c.wave_direction != null) summary += " from the " + compass(c.wave_direction);
+      if (c.wave_period != null) summary += ", every " + Math.round(c.wave_period) + " s";
+      summary += ".";
+      if (c.swell_wave_height != null) {
+        summary += " Swell " + waveH(c.swell_wave_height);
+        if (c.swell_wave_direction != null) summary += " from the " + compass(c.swell_wave_direction);
+        if (c.swell_wave_period != null) summary += " (" + Math.round(c.swell_wave_period) + " s)";
+        summary += ".";
+      }
+    }
+    $("seaNow").textContent = summary;
+
+    var idx = currentIndex(d);
+    var n = Math.min(72, d.hourly.time.length - idx);
+    if (n < 2) return;
+    var times = d.hourly.time.slice(idx, idx + n);
+    var ser = seaSeries(times);
+    var imp = imperial(), unit = imp ? "ft" : "m";
+    var dv = function (v) { return v == null ? null : imp ? v * 3.28084 : v; };
+
+    var W = 960, H = 250, L = 42, R = 14, T = 14, B = 50, bottom = H - B;
+    var step = (W - L - R) / (n - 1);
+    var x = function (i) { return L + i * step; };
+    var all = ser.wh.concat(ser.sh).filter(function (v) { return v != null; }).map(dv);
+    var maxV = all.length ? Math.max.apply(null, all) : 1;
+    var gs = imp ? (maxV <= 4 ? 1 : maxV <= 10 ? 2 : 5) : (maxV <= 1.2 ? 0.25 : maxV <= 3 ? 0.5 : maxV <= 6 ? 1 : 2);
+    var yMax = Math.max(gs * 2, Math.ceil((maxV * 1.15) / gs) * gs);
+    var y = function (disp) { return T + (bottom - T) * (1 - disp / yMax); };
+    var dec = gs < 0.5 ? 2 : gs < 1 ? 1 : 0;
+
+    var s = nightShade(d, times, x, step, L, W - R, T, bottom);
+    for (var g = 0; g <= yMax + 1e-9; g += gs) {
+      s += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y(g).toFixed(1) + '" y2="' + y(g).toFixed(1) + '" stroke="var(--line)" stroke-width="1"/>';
+      s += '<text x="' + (L - 8) + '" y="' + (y(g) + 4).toFixed(1) + '" text-anchor="end" font-size="12" fill="var(--muted)" font-family="Barlow, sans-serif">' + g.toFixed(dec) + "</text>";
+    }
+    s += '<text x="' + (L - 8) + '" y="' + (T - 2) + '" text-anchor="end" font-size="11" fill="var(--muted)" font-family="Barlow, sans-serif">' + unit + "</text>";
+
+    // Caution bands: moderate (1.25 m) and rough (2.5 m)
+    [[1.25, "var(--amber)", "Moderate"], [2.5, "var(--red)", "Rough"]].forEach(function (b) {
+      var bv = dv(b[0]);
+      if (bv > yMax) return;
+      s += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y(bv).toFixed(1) + '" y2="' + y(bv).toFixed(1) + '" stroke="' + b[1] + '" stroke-width="1.2" stroke-dasharray="2 4"/>';
+      s += '<text x="' + (W - R - 4) + '" y="' + (y(bv) - 4).toFixed(1) + '" text-anchor="end" font-size="11" fill="' + b[1] + '" font-family="Barlow, sans-serif">' + b[2] + "</text>";
+    });
+
+    s += timeAxis(times, x, H, T);
+    times.forEach(function (t, i) {
+      if (+t.slice(11, 13) % 3 === 0 && ser.wd[i] != null) {
+        s += '<path d="M0,-7 L4.5,4 L0,1.5 L-4.5,4 Z" fill="var(--ink)" transform="translate(' + x(i).toFixed(1) + "," + (bottom + 17) + ") rotate(" + ((ser.wd[i] + 180) % 360) + ')"/>';
+      }
+    });
+
+    var line = function (arr) {
+      var out = "", pen = false;
+      arr.forEach(function (v, i) {
+        if (v == null) { pen = false; return; }
+        out += (pen ? "L" : "M") + x(i).toFixed(1) + "," + y(dv(v)).toFixed(1) + " ";
+        pen = true;
+      });
+      return out;
+    };
+    var first = ser.wh.findIndex(function (v) { return v != null; });
+    var last = ser.wh.length - 1 - ser.wh.slice().reverse().findIndex(function (v) { return v != null; });
+    var wavePath = line(ser.wh);
+    if (first >= 0) {
+      s += '<path d="' + wavePath + "L" + x(last).toFixed(1) + "," + bottom + " L" + x(first).toFixed(1) + "," + bottom + ' Z" fill="var(--sea)" fill-opacity="0.85"/>';
+      s += '<path d="' + wavePath + '" fill="none" stroke="var(--sea-strong)" stroke-width="2.5" stroke-linejoin="round"/>';
+    }
+    s += '<path d="' + line(ser.sh) + '" fill="none" stroke="var(--ink)" stroke-width="2" stroke-dasharray="6 4" stroke-linejoin="round"/>';
+
+    s += '<line id="seaCursor" x1="0" x2="0" y1="' + T + '" y2="' + bottom + '" stroke="var(--ink)" stroke-width="1.5" visibility="hidden"/>';
+    s += '<rect id="seaHit" x="' + L + '" y="0" width="' + (W - L - R) + '" height="' + H + '" fill="transparent"/>';
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    svg.innerHTML = s;
+
+    function show(e) {
+      var rect = svg.getBoundingClientRect();
+      var px = (e.clientX - rect.left) / rect.width * W;
+      var i = Math.max(0, Math.min(n - 1, Math.round((px - L) / step)));
+      var cur = $("seaCursor");
+      cur.setAttribute("x1", x(i));
+      cur.setAttribute("x2", x(i));
+      cur.setAttribute("visibility", "visible");
+      var txt = dayLabel(times[i]) + ", " + hhmm(times[i]) + ": ";
+      if (ser.wh[i] == null) { $("seaReadout").textContent = txt + "no data"; return; }
+      txt += seaWord(ser.wh[i]).toLowerCase() + ", waves " + waveH(ser.wh[i]);
+      if (ser.wd[i] != null) txt += " from the " + compass(ser.wd[i]);
+      if (ser.wp[i] != null) txt += " (" + Math.round(ser.wp[i]) + " s)";
+      if (ser.sh[i] != null) txt += ", swell " + waveH(ser.sh[i]) + (ser.sd[i] != null ? " from the " + compass(ser.sd[i]) : "");
+      if (ser.ww[i] != null) txt += ", wind chop " + waveH(ser.ww[i]);
+      $("seaReadout").textContent = txt;
+    }
+    $("seaHit").addEventListener("pointermove", show);
+    $("seaHit").addEventListener("pointerdown", show);
+
+    $("seaSource").textContent = (m.moved ? "Using the nearest open-water point (about " + Math.round(m.movedKm) + " km away). " : "") +
+      "Wave height is the significant wave height: the average of the biggest third of waves. Expect the odd wave up to about twice that. " +
+      "This is an open-sea model, so sheltered harbours and bays are usually calmer, while tide against wind and shallow bars can be much rougher.";
+  }
+
   function renderDays(d) {
     var dl = d.daily, out = "";
     for (var i = 0; i < Math.min(4, dl.time.length); i++) {
@@ -924,6 +1156,7 @@
         "<div>" + (WMO[dl.weather_code[i]] || "–") + "</div>" +
         "<div>High " + fmt.temp(dl.temperature_2m_max[i]) + "<small>Low " + fmt.temp(dl.temperature_2m_min[i]) + "</small></div>" +
         "<div>" + compass(dl.wind_direction_10m_dominant[i]) + " up to " + Math.round(dl.wind_speed_10m_max[i]) + " kn<small>Gusts " + Math.round(dl.wind_gusts_10m_max[i]) + " kn</small></div>" +
+        "<div>" + dayWaves(dl.time[i]) + "</div>" +
         "<div>Rain " + (dl.precipitation_probability_max[i] == null ? "–" : dl.precipitation_probability_max[i] + "%") + "</div>" +
         "<div>Sunrise " + hhmm(dl.sunrise[i]) + "<small>Sunset " + hhmm(dl.sunset[i]) + "</small></div>" +
         "</li>";
