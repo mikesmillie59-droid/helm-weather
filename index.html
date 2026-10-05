@@ -181,6 +181,24 @@
     .day { grid-template-columns: 1fr 1fr; }
   }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  /* More from My Vessel + email sign-up */
+  .more-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 12px; }
+  .more-card { display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; color: var(--ink); text-decoration: none; }
+  a.more-card:hover { border-color: var(--sea-strong); }
+  a.more-card:focus-visible { outline: 3px solid var(--sea-strong); outline-offset: 2px; }
+  .more-card h3 { font-family: var(--num); font-weight: 600; font-size: 1.35rem; margin: 0 0 4px; }
+  .more-card p { margin: 0 0 8px; color: var(--muted); font-size: 0.95rem; }
+  .more-card .go { color: var(--sea-strong); font-weight: 600; font-size: 0.95rem; }
+  .more-card.signup { border-left: 4px solid var(--magenta); }
+  .signup-row { display: flex; gap: 8px; margin-top: 6px; }
+  .signup-row input { flex: 1; min-width: 0; font: inherit; font-size: 16px; padding: 0 12px; min-height: 44px; border-radius: 6px; border: 1.5px solid var(--line); background: var(--paper); color: var(--ink); }
+  .signup-msg { min-height: 1.3em; margin: 6px 0 0 !important; font-weight: 600; font-size: 0.92rem !important; }
+  .signup-msg.ok { color: var(--sea-strong) !important; }
+  .signup-msg.err { color: var(--red) !important; }
+  .signup-row[hidden], .more-card[hidden] { display: none; }
+  .hp { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
+  @media (max-width: 860px) { .more-grid { grid-template-columns: 1fr; } }
+  @media (max-width: 420px) { .signup-row { flex-direction: column; } }
 </style>
 </head>
 <body>
@@ -262,6 +280,36 @@
   <section aria-label="Day by day">
     <h2>Day by day</h2>
     <ul class="days" id="days"></ul>
+  </section>
+  <section aria-label="More from My Vessel" class="more">
+    <h2>From the skipper</h2>
+    <div class="more-grid">
+      <div class="more-card signup" id="signupCard" hidden>
+        <h3>Get tips and app news</h3>
+        <p>An occasional email from Mike: new features, tide and weather tips, and news about the My Vessel apps. No spam.</p>
+        <form id="signupForm" novalidate>
+          <label for="signupEmail" class="hint">Your email address</label>
+          <div class="signup-row" id="signupRow">
+            <input id="signupEmail" type="email" name="email" required placeholder="you@example.com" autocomplete="email" inputmode="email">
+            <button class="primary" type="submit">Sign me up</button>
+          </div>
+          <input type="hidden" name="source" value="Weather app">
+          <input type="hidden" name="_subject" value="New sign-up: My Helm Weather app">
+          <input type="text" name="_gotcha" class="hp" tabindex="-1" autocomplete="off" aria-hidden="true">
+          <p class="signup-msg" id="signupMsg" role="status" aria-live="polite"></p>
+        </form>
+      </div>
+      <a class="more-card" href="https://myvessellog.com/helm.html">
+        <h3>My Helm: navigate with confidence</h3>
+        <p>Your boat on official NZ (LINZ) and US (NOAA) charts, offline downloads, spoken hazard alerts and a one-tap man-overboard button.</p>
+        <span class="go">See My Helm &rarr;</span>
+      </a>
+      <a class="more-card" href="https://myvessellog.com/maintenance.html">
+        <h3>My Vessel Log: never miss a service</h3>
+        <p>Engine hours, servicing and trips in one place, so you always know what's due. One-off price, no subscription.</p>
+        <span class="go">See My Vessel Log &rarr;</span>
+      </a>
+    </div>
   </section>
 </main>
 
@@ -1266,6 +1314,60 @@
   } else {
     useGps(true);
   }
+})();
+</script>
+<script>
+/* =====================================================================
+   SETTINGS: the only two lines you need to change
+   1. Paste your Formspree form address between the quotes,
+      e.g. 'https://formspree.io/f/abcdwxyz'
+   2. Paste your Cloudflare Web Analytics token between the quotes.
+   Until these are filled in, the sign-up box stays hidden and no
+   visitor counting happens, so it is safe to upload as-is.
+   ===================================================================== */
+var SIGNUP_FORM_URL = 'https://formspree.io/f/xppqagqr';
+var CLOUDFLARE_TOKEN = 'ea8249365c84408a88fb51a2fc041dd2';
+
+(function () {
+  if (CLOUDFLARE_TOKEN && CLOUDFLARE_TOKEN.indexOf('PASTE_') !== 0) {
+    var cf = document.createElement('script');
+    cf.defer = true;
+    cf.src = 'https://static.cloudflareinsights.com/beacon.min.js';
+    cf.setAttribute('data-cf-beacon', JSON.stringify({ token: CLOUDFLARE_TOKEN }));
+    document.body.appendChild(cf);
+  }
+
+  var card = document.getElementById('signupCard');
+  var form = document.getElementById('signupForm');
+  if (!card || !form || !SIGNUP_FORM_URL || SIGNUP_FORM_URL.indexOf('https://formspree.io/') !== 0) return;
+  card.hidden = false;
+  form.action = SIGNUP_FORM_URL;
+  form.method = 'POST';
+  var msg = document.getElementById('signupMsg');
+  var row = document.getElementById('signupRow');
+  var email = document.getElementById('signupEmail');
+  function say(text, kind) { msg.textContent = text; msg.className = 'signup-msg ' + (kind || ''); }
+  var done = false;
+  try { done = localStorage.getItem('helmWeatherSignedUp') === '1'; } catch (e) {}
+  if (done) { row.hidden = true; say("You're on the list. Thanks!", 'ok'); return; }
+  form.addEventListener('submit', function (event) {
+    event.preventDefault();
+    if (!email.value || !email.checkValidity()) { say('Please enter a valid email address.', 'err'); email.focus(); return; }
+    var button = form.querySelector('button[type="submit"]');
+    button.disabled = true;
+    say('Signing you up…');
+    fetch(SIGNUP_FORM_URL, { method: 'POST', body: new FormData(form), headers: { Accept: 'application/json' } })
+      .then(function (r) {
+        if (!r.ok) throw new Error('bad');
+        row.hidden = true;
+        say("Thanks, you're on the list. Fair winds!", 'ok');
+        try { localStorage.setItem('helmWeatherSignedUp', '1'); } catch (e) {}
+      })
+      .catch(function () {
+        button.disabled = false;
+        say('Sorry, that didn\u2019t go through. Please try again, or email mike@myvessellog.com.', 'err');
+      });
+  });
 })();
 </script>
 </body>
