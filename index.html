@@ -116,6 +116,9 @@
   }
   #results small { color: var(--muted); display: block; font-weight: 400; }
   #map { height: min(60vh, 520px); border-radius: 6px; border: 1px solid var(--line); }
+  /* Pick on map: crosshair for choosing a spot, closed hand only while dragging the map */
+  #map.leaflet-grab, #map .leaflet-interactive { cursor: crosshair; }
+  .leaflet-dragging #map.leaflet-grab, .leaflet-dragging #map .leaflet-interactive { cursor: grabbing; }
   .hint { color: var(--muted); font-size: 0.92rem; margin: 8px 0 0; }
 
   #status { margin: 12px 0 0; font-weight: 500; color: var(--sea-strong); min-height: 1.4em; }
